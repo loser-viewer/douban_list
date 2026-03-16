@@ -3,7 +3,7 @@ WidgetMetadata = {
   title: "豆瓣自定义片单",
   description: "支持豆列 / 官方榜单 / App dispatch，并支持随机排序",
   author: "ChatGPT",
-  version: "1.0.0",
+  version: "1.1",
   requiredVersion: "0.0.1",
   detailCacheDuration: 60,
   modules: [
@@ -167,6 +167,34 @@ function stringSimilarity(a, b) {
   return common / Math.max(xSet.size, ySet.size, 1);
 }
 
+function normalizeDoubanUrl(url) {
+  let cleaned = String(url || "").trim();
+  if (!cleaned) return "";
+
+  // 先处理 douban app dispatch
+  if (cleaned.includes("douban.com/doubanapp/dispatch")) {
+    cleaned = parseDoubanAppDispatchUrl(cleaned);
+  }
+
+  // 去掉 hash
+  cleaned = cleaned.split("#")[0];
+
+  // 去掉无关 query，只保留主路径
+  cleaned = cleaned.replace(/[?&](dt_dapp|from|openapp|network|push_channel|loc_id|loc_name)=[^&]*/g, "");
+  cleaned = cleaned.replace(/\?&/, "?");
+  cleaned = cleaned.replace(/[?&]$/, "");
+  cleaned = cleaned.replace(/\?$/, "");
+
+  // m站豆列统一转桌面
+  if (/^https?:\/\/m\.douban\.com\/doulist\/\d+/.test(cleaned)) {
+    cleaned = cleaned.replace("https://m.douban.com", "https://www.douban.com");
+  }
+
+  // 统一去掉多余斜杠后的 query 残留
+  cleaned = cleaned.replace(/\/+\?/, "/?");
+
+  return cleaned;
+}
 // ===================== TMDB 类型与流派 =====================
 
 let __tmdbGenreCache = null;
@@ -316,24 +344,30 @@ async function fetchImdbItemsForDouban(scItems = []) {
 // ===================== 豆瓣入口 =====================
 
 async function loadEnhancedDoubanList(params = {}) {
-  const url = String(params.url || "").trim();
-  if (!url) return [];
+  const rawUrl = String(params.url || "").trim();
+  if (!rawUrl) return [];
 
-  if (url.includes("douban.com/doulist/")) {
-    return loadEnhancedDefaultList(params);
+  const url = normalizeDoubanUrl(rawUrl);
+
+  // 支持桌面豆列
+  if (/^https?:\/\/www\.douban\.com\/doulist\/\d+\/?/.test(url)) {
+    return loadEnhancedDefaultList({ ...params, url });
   }
 
-  if (url.includes("m.douban.com/doulist/")) {
-    const desktopUrl = url.replace("m.douban.com", "www.douban.com");
+  // 支持移动端豆列
+  if (/^https?:\/\/m\.douban\.com\/doulist\/\d+\/?/.test(url)) {
+    const desktopUrl = url.replace("https://m.douban.com", "https://www.douban.com");
     return loadEnhancedDefaultList({ ...params, url: desktopUrl });
   }
 
+  // 支持官方榜单 / subject_collection
   if (url.includes("subject_collection/")) {
-    return loadEnhancedSubjectCollection(params);
+    return loadEnhancedSubjectCollection({ ...params, url });
   }
 
-  if (url.includes("douban.com/doubanapp/dispatch")) {
-    const parsedUrl = parseDoubanAppDispatchUrl(url);
+  // 支持 app dispatch
+  if (rawUrl.includes("douban.com/doubanapp/dispatch")) {
+    const parsedUrl = normalizeDoubanUrl(rawUrl);
     return loadEnhancedDoubanList({ ...params, url: parsedUrl });
   }
 
@@ -344,7 +378,8 @@ async function loadEnhancedDoubanList(params = {}) {
 
 async function loadEnhancedDefaultList(params = {}) {
   const url = String(params.url || "");
-  const listId = url.match(/doulist\/(\d+)/)?.[1];
+  const normalizedUrl = normalizeDoubanUrl(url);
+  const listId = normalizedUrl.match(/doulist\/(\d+)/)?.[1];
   if (!listId) return [];
 
   const page = Math.max(parseInt(params.page || 1, 10), 1);
